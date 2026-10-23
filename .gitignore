@@ -1,33 +1,29 @@
-HELP.md
-target/
-.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
+# Maven / Java
+**/target/
+*.class
 
-### STS ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
+# React / Node.js
+**/node_modules/
+**/dist/
+**/coverage/
 
-### IntelliJ IDEA ###
-.idea
-*.iws
+# IDE
+.idea/
 *.iml
-*.ipr
-
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
-
-### VS Code ###
 .vscode/
+out/
+
+# macOS
+.DS_Store
+
+# Environment files
+.env
+.env.*
+!.env.example
+**/application-local.properties
+**/application-local.yml
+**/application-local.yaml
+
+# Logs
+*.log
+logs/
