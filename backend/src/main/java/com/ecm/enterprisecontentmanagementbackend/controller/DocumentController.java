@@ -2,8 +2,11 @@ package com.ecm.enterprisecontentmanagementbackend.controller;
 
 import com.ecm.enterprisecontentmanagementbackend.dto.DocumentRequest;
 import com.ecm.enterprisecontentmanagementbackend.dto.DocumentResponse;
+import com.ecm.enterprisecontentmanagementbackend.dto.DocumentVersionResponse;
 import com.ecm.enterprisecontentmanagementbackend.entity.DocumentEntity;
 import com.ecm.enterprisecontentmanagementbackend.service.DocumentService;
+import com.ecm.enterprisecontentmanagementbackend.service.DocumentVersionService;
+
 import jakarta.validation.Valid;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
@@ -23,9 +26,14 @@ import java.util.List;
 public class DocumentController {
 
     private final DocumentService service;
+    private final DocumentVersionService versionService;
 
-    public DocumentController(DocumentService service) {
+    public DocumentController(
+            DocumentService service,
+            DocumentVersionService versionService
+    ) {
         this.service = service;
+        this.versionService = versionService;
     }
 
     @GetMapping
@@ -38,8 +46,8 @@ public class DocumentController {
 
     @GetMapping("/{id}")
     public ResponseEntity<DocumentResponse> getDocumentById(
-            @PathVariable Long id) {
-
+            @PathVariable Long id
+    ) {
         return service.getDocumentById(id)
                 .map(DocumentResponse::from)
                 .map(ResponseEntity::ok)
@@ -48,10 +56,12 @@ public class DocumentController {
 
     @PostMapping
     public ResponseEntity<DocumentResponse> createDocument(
-            @Valid @RequestBody DocumentRequest request) {
-
-        var document = service.createDocument(
-                request.name(), request.contentType());
+            @Valid @RequestBody DocumentRequest request
+    ) {
+        DocumentEntity document = service.createDocument(
+                request.name(),
+                request.contentType()
+        );
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(DocumentResponse.from(document));
@@ -88,37 +98,107 @@ public class DocumentController {
             return ResponseEntity.notFound().build();
         }
 
-        String filename = document.get().getName();
+        return attachment(resource.get(), document.get().getName());
+    }
 
-        ContentDisposition disposition = ContentDisposition.attachment()
-                .filename(filename, StandardCharsets.UTF_8)
-                .build();
+    @PostMapping(
+            value = "/{id}/versions",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
+    public ResponseEntity<DocumentVersionResponse> uploadVersion(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file
+    ) throws IOException {
 
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .body(resource.get());
+        return versionService.uploadVersion(id, file)
+                .map(DocumentVersionResponse::from)
+                .map(response -> ResponseEntity
+                        .status(HttpStatus.CREATED)
+                        .body(response))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/{id}/versions")
+    public ResponseEntity<List<DocumentVersionResponse>> listVersions(
+            @PathVariable Long id
+    ) {
+        if (service.getDocumentById(id).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        List<DocumentVersionResponse> versions =
+                versionService.listVersions(id)
+                        .stream()
+                        .map(DocumentVersionResponse::from)
+                        .toList();
+
+        return ResponseEntity.ok(versions);
+    }
+
+    @GetMapping("/{id}/versions/{version}/download")
+    public ResponseEntity<Resource> downloadVersion(
+            @PathVariable Long id,
+            @PathVariable Integer version
+    ) throws IOException {
+
+        var versionEntity = versionService.getVersion(id, version);
+
+        if (versionEntity.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        var resource = versionService.downloadVersion(id, version);
+
+        if (resource.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String filename = service.getDocumentById(id)
+                .map(DocumentEntity::getName)
+                .orElse("document");
+
+        return attachment(resource.get(), filename);
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<DocumentResponse> updateDocument(
             @PathVariable Long id,
-            @Valid @RequestBody DocumentRequest request) {
-
+            @Valid @RequestBody DocumentRequest request
+    ) {
         return service.updateDocument(
-                        id, request.name(), request.contentType())
+                        id,
+                        request.name(),
+                        request.contentType())
                 .map(DocumentResponse::from)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteDocument(@PathVariable Long id) {
-
+    public ResponseEntity<Void> deleteDocument(
+            @PathVariable Long id
+    ) {
         if (service.deleteDocument(id)) {
             return ResponseEntity.noContent().build();
         }
 
         return ResponseEntity.notFound().build();
+    }
+
+    private ResponseEntity<Resource> attachment(
+            Resource resource,
+            String filename
+    ) {
+        ContentDisposition disposition = ContentDisposition.attachment()
+                .filename(filename, StandardCharsets.UTF_8)
+                .build();
+
+        return ResponseEntity.ok()
+                .header(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        disposition.toString()
+                )
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(resource);
     }
 }

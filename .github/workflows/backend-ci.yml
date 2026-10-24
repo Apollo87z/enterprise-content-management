@@ -7,32 +7,25 @@ on:
       - dev-backend
       - main
 
+  pull_request:
+    branches:
+      - dev-backend
+      - main
+
+  workflow_dispatch:
+
 permissions:
   contents: read
 
 concurrency:
-  group: backend-${{ github.ref }}
+  group: backend-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test-and-build:
     name: Test and Build Backend
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: ecmdb
-          POSTGRES_USER: ecm
-          POSTGRES_PASSWORD: ecm_ci_password
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U ecm -d ecmdb"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -46,13 +39,24 @@ jobs:
           cache: maven
           cache-dependency-path: backend/pom.xml
 
+      - name: Make Maven wrapper executable
+        run: chmod +x backend/mvnw
+
+      - name: Verify Docker availability
+        run: docker info
+
       - name: Run Maven tests and build
         working-directory: backend
-        env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5433/ecmdb
-          SPRING_DATASOURCE_USERNAME: ecm
-          SPRING_DATASOURCE_PASSWORD: ecm_ci_password
-        run: bash ./mvnw -B clean verify
+        run: ./mvnw -B clean verify
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build Docker image
         run: docker build -t ecm-backend:ci ./backend
@@ -60,7 +64,9 @@ jobs:
   promote-to-dev:
     name: Merge Feature and Delete Branch
     needs: test-and-build
-    if: startsWith(github.ref, 'refs/heads/feature/')
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-latest
 
     permissions:
@@ -104,7 +110,9 @@ jobs:
   publish-ghcr:
     name: Publish Docker Image to GHCR
     needs: test-and-build
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     permissions:

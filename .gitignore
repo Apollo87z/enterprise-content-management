@@ -27,3 +27,13 @@ out/
 # Logs
 *.log
 logs/
+
+# Local test artifacts
+/backend/FETCH_HEAD
+/backend/downloaded.pdf
+/backend/empty.pdf
+/backend/invalid.txt
+/backend/latest.pdf
+/backend/test.pdf
+/backend/version1.pdf
+/backend/version2.pdf
