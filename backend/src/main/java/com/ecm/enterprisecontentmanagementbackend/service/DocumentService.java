@@ -1,5 +1,7 @@
+
 package com.ecm.enterprisecontentmanagementbackend.service;
 
+import com.ecm.enterprisecontentmanagementbackend.dto.DocumentRequest;
 import com.ecm.enterprisecontentmanagementbackend.entity.DocumentEntity;
 import com.ecm.enterprisecontentmanagementbackend.entity.DocumentVersionEntity;
 import com.ecm.enterprisecontentmanagementbackend.repository.DocumentRepository;
@@ -7,6 +9,7 @@ import com.ecm.enterprisecontentmanagementbackend.repository.DocumentVersionRepo
 import com.ecm.enterprisecontentmanagementbackend.storage.FileStorageService;
 import com.ecm.enterprisecontentmanagementbackend.validation.DocumentFileValidator;
 
+import org.hibernate.query.criteria.HibernateCriteriaBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
@@ -35,17 +38,20 @@ public class DocumentService {
     private final DocumentVersionRepository versionRepository;
     private final FileStorageService fileStorageService;
     private final DocumentFileValidator fileValidator;
+    private final DocumentAuditService auditService;
 
     public DocumentService(
             DocumentRepository repository,
             DocumentVersionRepository versionRepository,
             FileStorageService fileStorageService,
-            DocumentFileValidator fileValidator
+            DocumentFileValidator fileValidator,
+            DocumentAuditService auditService
     ) {
         this.repository = repository;
         this.versionRepository = versionRepository;
         this.fileStorageService = fileStorageService;
         this.fileValidator = fileValidator;
+        this.auditService = auditService;
     }
 
     public List<DocumentEntity> getAllDocuments() {
@@ -58,13 +64,23 @@ public class DocumentService {
             String contentType,
             Pageable pageable
     ) {
+        return searchDocuments(name, contentType, null, null, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<DocumentEntity> searchDocuments(
+            String name,
+            String contentType,
+            String category,
+            String tag,
+            Pageable pageable
+    ) {
         Specification<DocumentEntity> specification =
                 (root, query, cb) -> cb.conjunction();
 
         if (name != null && !name.isBlank()) {
             String normalizedName = name.trim().toLowerCase(Locale.ROOT);
 
-            // Escape SQL LIKE wildcards so the search is literal.
             String escapedName = normalizedName
                     .replace("\\", "\\\\")
                     .replace("%", "\\%")
@@ -92,6 +108,38 @@ public class DocumentService {
             );
         }
 
+        if (category != null && !category.isBlank()) {
+            String normalizedCategory = category.trim();
+
+            specification = specification.and(
+                    (root, query, cb) ->
+                            cb.equal(
+                                    root.get("category"),
+                                    normalizedCategory
+                            )
+            );
+        }
+
+        if (tag != null && !tag.isBlank()) {
+            String normalizedTag = tag.trim();
+
+            specification = specification.and(
+                    (root, query, cb) -> {
+                        HibernateCriteriaBuilder hcb =
+                                (HibernateCriteriaBuilder) cb;
+
+                        return hcb.isTrue(
+                                hcb.sql(
+                                        "? @> ARRAY[?]::text[]",
+                                        Boolean.class,
+                                        root.get("tags"),
+                                        hcb.literal(normalizedTag)
+                                )
+                        );
+                    }
+            );
+        }
+
         return repository.findAll(specification, pageable);
     }
 
@@ -99,14 +147,36 @@ public class DocumentService {
         return repository.findById(id);
     }
 
+    @Transactional
+    public DocumentEntity createDocument(DocumentRequest request) {
+        DocumentEntity document = new DocumentEntity(
+                request.name(),
+                request.contentType()
+        );
+
+        document.setDescription(request.description());
+        document.setCategory(request.category());
+        document.setTags(request.tags());
+
+        DocumentEntity saved = repository.save(document);
+
+        auditService.record(
+                saved.getId(),
+                "DOCUMENT_CREATED",
+                "system",
+                "Document created: " + saved.getName()
+        );
+
+        return saved;
+    }
+
+    @Transactional
     public DocumentEntity createDocument(String name, String contentType) {
-        DocumentEntity document = new DocumentEntity(name, contentType);
-        return repository.save(document);
+        return createDocument(new DocumentRequest(name, contentType));
     }
 
     @Transactional(rollbackFor = IOException.class)
     public DocumentEntity uploadDocument(MultipartFile file) throws IOException {
-
         fileValidator.validate(file);
 
         String originalName = file.getOriginalFilename();
@@ -126,7 +196,6 @@ public class DocumentService {
 
         String storageKey = fileStorageService.store(file);
 
-        // Remove the stored file if the database transaction rolls back.
         registerRollbackCleanup(storageKey);
 
         DocumentEntity document = new DocumentEntity(
@@ -139,7 +208,6 @@ public class DocumentService {
 
         document = repository.save(document);
 
-        // The initial upload is version 1.
         DocumentVersionEntity firstVersion = new DocumentVersionEntity(
                 document,
                 1,
@@ -150,44 +218,68 @@ public class DocumentService {
 
         versionRepository.save(firstVersion);
 
+        auditService.record(
+                document.getId(),
+                "DOCUMENT_UPLOADED",
+                "system",
+                "Document uploaded: " + document.getName()
+        );
+
         return document;
     }
 
+    @Transactional
     public Optional<Resource> downloadDocument(Long id) throws IOException {
-
         Optional<DocumentEntity> document = repository.findById(id);
 
         if (document.isEmpty() || document.get().getStorageKey() == null) {
             return Optional.empty();
         }
 
-        return Optional.of(
-                fileStorageService.load(document.get().getStorageKey())
+        Resource resource =
+                fileStorageService.load(document.get().getStorageKey());
+
+        auditService.record(
+                id,
+                "DOCUMENT_DOWNLOADED",
+                "system",
+                "Document download requested: " + document.get().getName()
         );
+
+        return Optional.of(resource);
     }
 
+    @Transactional
     public Optional<DocumentEntity> updateDocument(
             Long id,
-            String name,
-            String contentType
+            DocumentRequest request
     ) {
         return repository.findById(id).map(existing -> {
+            existing.setName(request.name());
 
-            existing.setName(name);
-
-            // Preserve the actual MIME type for uploaded files.
             if (existing.getStorageKey() == null) {
-                existing.setContentType(contentType);
+                existing.setContentType(request.contentType());
             }
 
-            return repository.save(existing);
+            existing.setDescription(request.description());
+            existing.setCategory(request.category());
+            existing.setTags(request.tags());
+
+            DocumentEntity saved = repository.save(existing);
+
+            auditService.record(
+                    saved.getId(),
+                    "DOCUMENT_UPDATED",
+                    "system",
+                    "Document metadata updated: " + saved.getName()
+            );
+
+            return saved;
         });
     }
 
     @Transactional
     public boolean deleteDocument(Long id) {
-
-        // Prevent concurrent version uploads during deletion.
         Optional<DocumentEntity> existing =
                 repository.findByIdForUpdate(id);
 
@@ -206,27 +298,29 @@ public class DocumentService {
                         .toList()
         );
 
-        // Handle documents created before version history was introduced.
         if (document.getStorageKey() != null
                 && !storageKeys.contains(document.getStorageKey())) {
-
             storageKeys.add(document.getStorageKey());
         }
 
-        // Remove version records before deleting the document.
+        auditService.record(
+                id,
+                "DOCUMENT_DELETED",
+                "system",
+                "Document deleted: " + document.getName()
+        );
+
         versionRepository.deleteAll(versions);
         versionRepository.flush();
 
         repository.delete(document);
         repository.flush();
 
-        // Delete physical files only after the database commit succeeds.
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
 
                     @Override
                     public void afterCommit() {
-
                         for (String key : storageKeys) {
                             try {
                                 fileStorageService.delete(key);
@@ -238,7 +332,6 @@ public class DocumentService {
                                 );
 
                             } catch (IOException exception) {
-
                                 logger.warn(
                                         "Failed to delete stored file {} for document {}",
                                         key,
@@ -255,19 +348,16 @@ public class DocumentService {
     }
 
     private void registerRollbackCleanup(String storageKey) {
-
         TransactionSynchronizationManager.registerSynchronization(
                 new TransactionSynchronization() {
 
                     @Override
                     public void afterCompletion(int status) {
-
                         if (status != STATUS_COMMITTED) {
                             try {
                                 fileStorageService.delete(storageKey);
 
                             } catch (IOException exception) {
-
                                 logger.warn(
                                         "Failed to clean up uploaded file {}",
                                         storageKey,
