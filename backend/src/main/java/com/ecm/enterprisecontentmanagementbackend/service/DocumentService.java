@@ -1,4 +1,3 @@
-
 package com.ecm.enterprisecontentmanagementbackend.service;
 
 import com.ecm.enterprisecontentmanagementbackend.dto.DocumentRequest;
@@ -7,6 +6,7 @@ import com.ecm.enterprisecontentmanagementbackend.entity.DocumentVersionEntity;
 import com.ecm.enterprisecontentmanagementbackend.repository.DocumentRepository;
 import com.ecm.enterprisecontentmanagementbackend.repository.DocumentVersionRepository;
 import com.ecm.enterprisecontentmanagementbackend.storage.FileStorageService;
+import com.ecm.enterprisecontentmanagementbackend.security.CurrentUserService;
 import com.ecm.enterprisecontentmanagementbackend.validation.DocumentFileValidator;
 
 import org.hibernate.query.criteria.HibernateCriteriaBuilder;
@@ -39,19 +39,22 @@ public class DocumentService {
     private final FileStorageService fileStorageService;
     private final DocumentFileValidator fileValidator;
     private final DocumentAuditService auditService;
+    private final CurrentUserService currentUserService;
 
     public DocumentService(
             DocumentRepository repository,
             DocumentVersionRepository versionRepository,
             FileStorageService fileStorageService,
             DocumentFileValidator fileValidator,
-            DocumentAuditService auditService
+            DocumentAuditService auditService,
+            CurrentUserService currentUserService
     ) {
         this.repository = repository;
         this.versionRepository = versionRepository;
         this.fileStorageService = fileStorageService;
         this.fileValidator = fileValidator;
         this.auditService = auditService;
+        this.currentUserService = currentUserService;
     }
 
     public List<DocumentEntity> getAllDocuments() {
@@ -163,7 +166,7 @@ public class DocumentService {
         auditService.record(
                 saved.getId(),
                 "DOCUMENT_CREATED",
-                "system",
+                currentUserService.getUsername(),
                 "Document created: " + saved.getName()
         );
 
@@ -221,7 +224,7 @@ public class DocumentService {
         auditService.record(
                 document.getId(),
                 "DOCUMENT_UPLOADED",
-                "system",
+                currentUserService.getUsername(),
                 "Document uploaded: " + document.getName()
         );
 
@@ -242,7 +245,7 @@ public class DocumentService {
         auditService.record(
                 id,
                 "DOCUMENT_DOWNLOADED",
-                "system",
+                currentUserService.getUsername(),
                 "Document download requested: " + document.get().getName()
         );
 
@@ -270,7 +273,7 @@ public class DocumentService {
             auditService.record(
                     saved.getId(),
                     "DOCUMENT_UPDATED",
-                    "system",
+                    currentUserService.getUsername(),
                     "Document metadata updated: " + saved.getName()
             );
 
@@ -306,7 +309,7 @@ public class DocumentService {
         auditService.record(
                 id,
                 "DOCUMENT_DELETED",
-                "system",
+                currentUserService.getUsername(),
                 "Document deleted: " + document.getName()
         );
 
