@@ -1,4 +1,7 @@
 package com.ecm.enterprisecontentmanagementbackend.model;
 
-public class Document {
-}
+public record Document(
+        Long id,
+        String name,
+        String contentType
+) {}
