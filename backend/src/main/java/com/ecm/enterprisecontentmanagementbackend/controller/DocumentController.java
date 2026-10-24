@@ -9,6 +9,10 @@ import com.ecm.enterprisecontentmanagementbackend.service.DocumentVersionService
 
 import jakarta.validation.Valid;
 import org.springframework.core.io.Resource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -20,10 +24,14 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/documents")
 public class DocumentController {
+
+    private static final Set<String> ALLOWED_SORT_FIELDS =
+            Set.of("id", "name", "contentType", "fileSize");
 
     private final DocumentService service;
     private final DocumentVersionService versionService;
@@ -36,12 +44,81 @@ public class DocumentController {
         this.versionService = versionService;
     }
 
+    public record DocumentPageResponse(
+            List<DocumentResponse> content,
+            int page,
+            int size,
+            long totalElements,
+            int totalPages,
+            boolean first,
+            boolean last
+    ) {}
+
     @GetMapping
-    public List<DocumentResponse> getAllDocuments() {
-        return service.getAllDocuments()
-                .stream()
-                .map(DocumentResponse::from)
-                .toList();
+    public DocumentPageResponse getAllDocuments(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String contentType,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "id,asc") String sort
+    ) {
+        if (page < 0) {
+            throw new IllegalArgumentException("Page must be >= 0");
+        }
+
+        if (size < 1 || size > 100) {
+            throw new IllegalArgumentException(
+                    "Page size must be between 1 and 100"
+            );
+        }
+
+        String[] sortParts = sort.split(",", -1);
+
+        if (sortParts.length != 2) {
+            throw new IllegalArgumentException(
+                    "Sort format must be field,asc or field,desc"
+            );
+        }
+
+        String sortField = sortParts[0].trim();
+        String sortDirection = sortParts[1].trim();
+
+        if (!ALLOWED_SORT_FIELDS.contains(sortField)) {
+            throw new IllegalArgumentException("Unsupported sort field");
+        }
+
+        if (!sortDirection.equalsIgnoreCase("asc")
+                && !sortDirection.equalsIgnoreCase("desc")) {
+            throw new IllegalArgumentException(
+                    "Sort direction must be asc or desc"
+            );
+        }
+
+        Sort.Direction direction =
+                Sort.Direction.fromString(sortDirection);
+
+        Sort sorting = Sort.by(direction, sortField);
+
+        // Stable pagination when multiple documents share the same name.
+        if (!sortField.equals("id")) {
+            sorting = sorting.and(Sort.by(Sort.Direction.ASC, "id"));
+        }
+
+        Pageable pageable = PageRequest.of(page, size, sorting);
+
+        Page<DocumentResponse> results =
+                service.searchDocuments(name, contentType, pageable)
+                        .map(DocumentResponse::from);
+
+        return new DocumentPageResponse(
+                results.getContent(),
+                results.getNumber(),
+                results.getSize(),
+                results.getTotalElements(),
+                results.getTotalPages(),
+                results.isFirst(),
+                results.isLast()
+        );
     }
 
     @GetMapping("/{id}")
