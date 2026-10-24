@@ -19,6 +19,21 @@ jobs:
     name: Test and Build Backend
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ecmdb
+          POSTGRES_USER: ecm
+          POSTGRES_PASSWORD: ecm_ci_password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U ecm -d ecmdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,6 +48,10 @@ jobs:
 
       - name: Run Maven tests and build
         working-directory: backend
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5433/ecmdb
+          SPRING_DATASOURCE_USERNAME: ecm
+          SPRING_DATASOURCE_PASSWORD: ecm_ci_password
         run: bash ./mvnw -B clean verify
 
       - name: Build Docker image
