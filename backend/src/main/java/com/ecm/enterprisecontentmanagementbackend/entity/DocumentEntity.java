@@ -1,3 +1,4 @@
+
 package com.ecm.enterprisecontentmanagementbackend.entity;
 
 import jakarta.persistence.*;
@@ -22,7 +23,6 @@ public class DocumentEntity {
     @Column(name = "file_size")
     private Long fileSize;
 
-
     protected DocumentEntity() {
     }
 
@@ -43,6 +43,14 @@ public class DocumentEntity {
         return contentType;
     }
 
+    public String getStorageKey() {
+        return storageKey;
+    }
+
+    public Long getFileSize() {
+        return fileSize;
+    }
+
     public void setName(String name) {
         this.name = name;
     }
@@ -51,21 +59,11 @@ public class DocumentEntity {
         this.contentType = contentType;
     }
 
-    public String getStorageKey() {
-        return storageKey;
-    }
-
     public void setStorageKey(String storageKey) {
         this.storageKey = storageKey;
-    }
-
-    public Long getFileSize() {
-        return fileSize;
     }
 
     public void setFileSize(Long fileSize) {
         this.fileSize = fileSize;
     }
 }
-
-
