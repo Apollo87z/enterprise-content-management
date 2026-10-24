@@ -31,7 +31,15 @@ import java.util.Set;
 public class DocumentController {
 
     private static final Set<String> ALLOWED_SORT_FIELDS =
-            Set.of("id", "name", "contentType", "fileSize");
+            Set.of(
+                    "id",
+                    "name",
+                    "contentType",
+                    "fileSize",
+                    "category",
+                    "createdAt",
+                    "updatedAt"
+            );
 
     private final DocumentService service;
     private final DocumentVersionService versionService;
@@ -58,6 +66,8 @@ public class DocumentController {
     public DocumentPageResponse getAllDocuments(
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String contentType,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String tag,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "id,asc") String sort
@@ -99,7 +109,6 @@ public class DocumentController {
 
         Sort sorting = Sort.by(direction, sortField);
 
-        // Stable pagination when multiple documents share the same name.
         if (!sortField.equals("id")) {
             sorting = sorting.and(Sort.by(Sort.Direction.ASC, "id"));
         }
@@ -107,7 +116,13 @@ public class DocumentController {
         Pageable pageable = PageRequest.of(page, size, sorting);
 
         Page<DocumentResponse> results =
-                service.searchDocuments(name, contentType, pageable)
+                service.searchDocuments(
+                                name,
+                                contentType,
+                                category,
+                                tag,
+                                pageable
+                        )
                         .map(DocumentResponse::from);
 
         return new DocumentPageResponse(
@@ -135,10 +150,7 @@ public class DocumentController {
     public ResponseEntity<DocumentResponse> createDocument(
             @Valid @RequestBody DocumentRequest request
     ) {
-        DocumentEntity document = service.createDocument(
-                request.name(),
-                request.contentType()
-        );
+        DocumentEntity document = service.createDocument(request);
 
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(DocumentResponse.from(document));
@@ -151,7 +163,6 @@ public class DocumentController {
     public ResponseEntity<DocumentResponse> uploadDocument(
             @RequestParam("file") MultipartFile file
     ) throws IOException {
-
         DocumentEntity document = service.uploadDocument(file);
 
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -162,7 +173,6 @@ public class DocumentController {
     public ResponseEntity<Resource> downloadDocument(
             @PathVariable Long id
     ) throws IOException {
-
         var document = service.getDocumentById(id);
 
         if (document.isEmpty()) {
@@ -186,7 +196,6 @@ public class DocumentController {
             @PathVariable Long id,
             @RequestParam("file") MultipartFile file
     ) throws IOException {
-
         return versionService.uploadVersion(id, file)
                 .map(DocumentVersionResponse::from)
                 .map(response -> ResponseEntity
@@ -217,7 +226,6 @@ public class DocumentController {
             @PathVariable Long id,
             @PathVariable Integer version
     ) throws IOException {
-
         var versionEntity = versionService.getVersion(id, version);
 
         if (versionEntity.isEmpty()) {
@@ -242,10 +250,7 @@ public class DocumentController {
             @PathVariable Long id,
             @Valid @RequestBody DocumentRequest request
     ) {
-        return service.updateDocument(
-                        id,
-                        request.name(),
-                        request.contentType())
+        return service.updateDocument(id, request)
                 .map(DocumentResponse::from)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());

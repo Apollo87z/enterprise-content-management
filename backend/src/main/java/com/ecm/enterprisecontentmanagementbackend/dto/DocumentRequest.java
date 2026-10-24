@@ -11,6 +11,18 @@ public record DocumentRequest(
 
         @NotBlank(message = "Content type is required")
         @Size(max = 255)
-        String contentType
+        String contentType,
 
-) {}
+        String description,
+
+        @Size(max = 100)
+        String category,
+
+        @Size(max = 20, message = "Maximum 20 tags allowed")
+        String[] tags
+
+) {
+    public DocumentRequest(String name, String contentType) {
+        this(name, contentType, null, null, null);
+    }
+}

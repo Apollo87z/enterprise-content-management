@@ -40,6 +40,9 @@ class DocumentServiceTest {
     @Mock
     private DocumentFileValidator fileValidator;
 
+    @Mock
+    private DocumentAuditService auditService;
+
     private DocumentService service;
 
     @BeforeEach
@@ -48,7 +51,8 @@ class DocumentServiceTest {
                 repository,
                 versionRepository,
                 fileStorageService,
-                fileValidator
+                fileValidator,
+                auditService
         );
     }
 
@@ -67,6 +71,13 @@ class DocumentServiceTest {
         assertEquals("application/pdf", result.getContentType());
 
         verify(repository).save(any(DocumentEntity.class));
+
+        verify(auditService).record(
+                null,
+                "DOCUMENT_CREATED",
+                "system",
+                "Document created: report.pdf"
+        );
     }
 
     @Test
@@ -82,6 +93,8 @@ class DocumentServiceTest {
 
         assertTrue(result.isPresent());
         assertEquals("report.pdf", result.get().getName());
+
+        verifyNoInteractions(auditService);
     }
 
     @Test
@@ -93,6 +106,8 @@ class DocumentServiceTest {
                 service.getDocumentById(99L);
 
         assertTrue(result.isEmpty());
+
+        verifyNoInteractions(auditService);
     }
 
     @Test
@@ -105,7 +120,11 @@ class DocumentServiceTest {
         assertFalse(deleted);
 
         verify(repository, never()).delete(any(DocumentEntity.class));
-        verifyNoInteractions(versionRepository, fileStorageService);
+        verifyNoInteractions(
+                versionRepository,
+                fileStorageService,
+                auditService
+        );
     }
 
     @Test
@@ -157,7 +176,13 @@ class DocumentServiceTest {
 
             order.verify(repository).flush();
 
-            // Files must not be deleted before commit.
+            verify(auditService).record(
+                    6L,
+                    "DOCUMENT_DELETED",
+                    "system",
+                    "Document deleted: report.pdf"
+            );
+
             verify(fileStorageService, never()).delete(anyString());
 
             assertEquals(
@@ -210,9 +235,15 @@ class DocumentServiceTest {
         try {
             assertTrue(service.deleteDocument(6L));
 
+            verify(auditService).record(
+                    6L,
+                    "DOCUMENT_DELETED",
+                    "system",
+                    "Document deleted: report.pdf"
+            );
+
             verify(fileStorageService, never()).delete(anyString());
 
-            // Simulate Spring's successful transaction commit callback.
             for (TransactionSynchronization synchronization :
                     TransactionSynchronizationManager.getSynchronizations()) {
 
