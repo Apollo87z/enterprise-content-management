@@ -1,4 +1,3 @@
-
 package com.ecm.enterprisecontentmanagementbackend.service;
 
 import com.ecm.enterprisecontentmanagementbackend.entity.DocumentEntity;
@@ -11,6 +10,9 @@ import com.ecm.enterprisecontentmanagementbackend.validation.DocumentFileValidat
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -20,6 +22,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 @Service
@@ -49,6 +52,49 @@ public class DocumentService {
         return repository.findAll();
     }
 
+    @Transactional(readOnly = true)
+    public Page<DocumentEntity> searchDocuments(
+            String name,
+            String contentType,
+            Pageable pageable
+    ) {
+        Specification<DocumentEntity> specification =
+                (root, query, cb) -> cb.conjunction();
+
+        if (name != null && !name.isBlank()) {
+            String normalizedName = name.trim().toLowerCase(Locale.ROOT);
+
+            // Escape SQL LIKE wildcards so the search is literal.
+            String escapedName = normalizedName
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_");
+
+            specification = specification.and(
+                    (root, query, cb) ->
+                            cb.like(
+                                    cb.lower(root.get("name")),
+                                    "%" + escapedName + "%",
+                                    '\\'
+                            )
+            );
+        }
+
+        if (contentType != null && !contentType.isBlank()) {
+            String normalizedContentType = contentType.trim();
+
+            specification = specification.and(
+                    (root, query, cb) ->
+                            cb.equal(
+                                    root.get("contentType"),
+                                    normalizedContentType
+                            )
+            );
+        }
+
+        return repository.findAll(specification, pageable);
+    }
+
     public Optional<DocumentEntity> getDocumentById(long id) {
         return repository.findById(id);
     }
@@ -69,7 +115,6 @@ public class DocumentService {
             throw new IllegalArgumentException("Filename is required");
         }
 
-        // Remove directory components from the uploaded filename.
         originalName = originalName.replace("\\", "/");
         originalName = originalName.substring(
                 originalName.lastIndexOf('/') + 1
@@ -81,7 +126,7 @@ public class DocumentService {
 
         String storageKey = fileStorageService.store(file);
 
-        // Remove the uploaded file if the database transaction rolls back.
+        // Remove the stored file if the database transaction rolls back.
         registerRollbackCleanup(storageKey);
 
         DocumentEntity document = new DocumentEntity(
@@ -94,7 +139,7 @@ public class DocumentService {
 
         document = repository.save(document);
 
-        // Every uploaded document starts with version 1.
+        // The initial upload is version 1.
         DocumentVersionEntity firstVersion = new DocumentVersionEntity(
                 document,
                 1,
@@ -130,7 +175,7 @@ public class DocumentService {
 
             existing.setName(name);
 
-            // Do not change the MIME type of an already stored file.
+            // Preserve the actual MIME type for uploaded files.
             if (existing.getStorageKey() == null) {
                 existing.setContentType(contentType);
             }
@@ -142,7 +187,7 @@ public class DocumentService {
     @Transactional
     public boolean deleteDocument(Long id) {
 
-        // Lock the document to prevent concurrent version uploads.
+        // Prevent concurrent version uploads during deletion.
         Optional<DocumentEntity> existing =
                 repository.findByIdForUpdate(id);
 
@@ -152,26 +197,23 @@ public class DocumentService {
 
         DocumentEntity document = existing.get();
 
-        // Load the version records before deleting anything.
         List<DocumentVersionEntity> versions =
                 versionRepository.findByDocumentIdOrderByVersionNumberDesc(id);
 
-        // Record all physical files that need to be removed after commit.
         List<String> storageKeys = new ArrayList<>(
                 versions.stream()
                         .map(DocumentVersionEntity::getStorageKey)
                         .toList()
         );
 
-        // Support legacy documents without version history.
+        // Handle documents created before version history was introduced.
         if (document.getStorageKey() != null
                 && !storageKeys.contains(document.getStorageKey())) {
 
             storageKeys.add(document.getStorageKey());
         }
 
-        // Delete child entities before deleting the parent document.
-        // This avoids Hibernate's transient-reference exception.
+        // Remove version records before deleting the document.
         versionRepository.deleteAll(versions);
         versionRepository.flush();
 
