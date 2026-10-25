@@ -1,11 +1,12 @@
-
 package com.ecm.enterprisecontentmanagementbackend.config;
 
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.*;
@@ -40,7 +41,9 @@ public class JwtConfig {
         );
     }
 
+    // Used for normal ECM API authentication.
     @Bean
+    @Primary
     public JwtDecoder jwtDecoder(
             SecretKey secretKey,
             @Value("${app.jwt.issuer}") String issuer
@@ -52,6 +55,21 @@ public class JwtConfig {
 
         decoder.setJwtValidator(
                 JwtValidators.createDefaultWithIssuer(issuer)
+        );
+
+        return decoder;
+    }
+
+    // Used only for WOPI access tokens.
+    @Bean("wopiJwtDecoder")
+    public JwtDecoder wopiJwtDecoder(SecretKey secretKey) {
+        NimbusJwtDecoder decoder = NimbusJwtDecoder
+                .withSecretKey(secretKey)
+                .macAlgorithm(MacAlgorithm.HS256)
+                .build();
+
+        decoder.setJwtValidator(
+                JwtValidators.createDefaultWithIssuer("urn:ecm:wopi")
         );
 
         return decoder;

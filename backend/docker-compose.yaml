@@ -14,6 +14,7 @@ services:
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       STORAGE_LOCATION: /app/uploads
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
     volumes:
       - document_storage:/app/uploads
     depends_on:
@@ -37,6 +38,19 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  collabora:
+    image: collabora/code:latest
+    container_name: ecm-collabora
+    ports:
+      - "127.0.0.1:9981:9980"
+    environment:
+      aliasgroup1: "http://backend:8080"
+      extra_params: "--o:ssl.enable=false --o:ssl.termination=false"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 
 volumes:
   postgres_data:

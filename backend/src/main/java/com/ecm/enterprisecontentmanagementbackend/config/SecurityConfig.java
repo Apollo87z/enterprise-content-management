@@ -5,6 +5,7 @@ import com.ecm.enterprisecontentmanagementbackend.security.DatabaseUserDetailsSe
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 
 import org.springframework.security.authentication.AuthenticationManager;
@@ -23,7 +24,52 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtGra
 @Configuration
 public class SecurityConfig {
 
+    /*
+     * WOPI security filter chain
+     *
+     * Applies only to /wopi/files/**
+     *
+     * Do not configure the normal OAuth2 JWT resource server here.
+     * Collabora may send WOPI tokens in the Authorization header,
+     * and the ECM JWT decoder would reject their issuer.
+     *
+     * WopiController must validate the document-scoped WOPI token
+     * for every protected WOPI operation.
+     */
     @Bean
+    @Order(1)
+    public SecurityFilterChain wopiSecurityFilterChain(
+            HttpSecurity http
+    ) throws Exception {
+
+        return http
+                .securityMatcher("/wopi/files/**")
+
+                .csrf(csrf -> csrf.disable())
+
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(
+                                SessionCreationPolicy.STATELESS
+                        )
+                )
+
+                .authorizeHttpRequests(auth -> auth
+                        .anyRequest().permitAll()
+                )
+
+                .httpBasic(basic -> basic.disable())
+                .formLogin(form -> form.disable())
+
+                .build();
+    }
+
+    /*
+     * Main ECM API security filter chain
+     *
+     * Uses normal ECM JWT authentication and role-based authorization.
+     */
+    @Bean
+    @Order(2)
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http
     ) throws Exception {
@@ -39,7 +85,7 @@ public class SecurityConfig {
 
                 .authorizeHttpRequests(auth -> auth
 
-                        // Public endpoints
+                        // Public health endpoints
                         .requestMatchers(
                                 "/api/v1/health",
                                 "/actuator/health"
@@ -87,7 +133,13 @@ public class SecurityConfig {
                                 "/api/v1/documents/*/versions/*/download"
                         ).hasAnyRole("VIEWER", "EDITOR", "ADMIN")
 
-                        // Reject any other document operations
+                        // Issue WOPI tokens to authenticated ECM users
+                        .requestMatchers(
+                                HttpMethod.POST,
+                                "/api/v1/documents/*/wopi-token"
+                        ).hasAnyRole("VIEWER", "EDITOR", "ADMIN")
+
+                        // Reject other document operations
                         .requestMatchers(
                                 "/api/v1/documents/**"
                         ).denyAll()
@@ -110,6 +162,13 @@ public class SecurityConfig {
                 .build();
     }
 
+    /*
+     * Convert the roles claim from the ECM JWT into
+     * Spring Security authorities.
+     *
+     * Example:
+     * roles: ["ROLE_ADMIN"]
+     */
     private JwtAuthenticationConverter jwtAuthenticationConverter() {
 
         JwtGrantedAuthoritiesConverter authoritiesConverter =
@@ -128,6 +187,9 @@ public class SecurityConfig {
         return converter;
     }
 
+    /*
+     * Username/password authentication for the login endpoint.
+     */
     @Bean
     public AuthenticationManager authenticationManager(
             DatabaseUserDetailsService userDetailsService,
