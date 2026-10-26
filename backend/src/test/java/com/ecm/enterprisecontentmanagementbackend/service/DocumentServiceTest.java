@@ -5,12 +5,14 @@ import com.ecm.enterprisecontentmanagementbackend.entity.DocumentEntity;
 import com.ecm.enterprisecontentmanagementbackend.entity.DocumentVersionEntity;
 import com.ecm.enterprisecontentmanagementbackend.repository.DocumentRepository;
 import com.ecm.enterprisecontentmanagementbackend.repository.DocumentVersionRepository;
+import com.ecm.enterprisecontentmanagementbackend.security.CurrentUserService;
 import com.ecm.enterprisecontentmanagementbackend.storage.FileStorageService;
 import com.ecm.enterprisecontentmanagementbackend.validation.DocumentFileValidator;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -28,6 +30,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class DocumentServiceTest {
 
+
     @Mock
     private DocumentRepository repository;
 
@@ -43,6 +46,9 @@ class DocumentServiceTest {
     @Mock
     private DocumentAuditService auditService;
 
+    @Mock
+    private CurrentUserService currentUserService;
+
     private DocumentService service;
 
     @BeforeEach
@@ -52,7 +58,8 @@ class DocumentServiceTest {
                 versionRepository,
                 fileStorageService,
                 fileValidator,
-                auditService
+                auditService,
+                currentUserService
         );
     }
 
@@ -63,6 +70,9 @@ class DocumentServiceTest {
 
         when(repository.save(any(DocumentEntity.class)))
                 .thenReturn(document);
+
+        when(currentUserService.getUsername())
+                .thenReturn("admin");
 
         DocumentEntity result =
                 service.createDocument("report.pdf", "application/pdf");
@@ -75,9 +85,11 @@ class DocumentServiceTest {
         verify(auditService).record(
                 null,
                 "DOCUMENT_CREATED",
-                "system",
+                "admin",
                 "Document created: report.pdf"
         );
+
+        verify(currentUserService).getUsername();
     }
 
     @Test
@@ -94,7 +106,7 @@ class DocumentServiceTest {
         assertTrue(result.isPresent());
         assertEquals("report.pdf", result.get().getName());
 
-        verifyNoInteractions(auditService);
+        verifyNoInteractions(auditService, currentUserService);
     }
 
     @Test
@@ -107,7 +119,7 @@ class DocumentServiceTest {
 
         assertTrue(result.isEmpty());
 
-        verifyNoInteractions(auditService);
+        verifyNoInteractions(auditService, currentUserService);
     }
 
     @Test
@@ -119,16 +131,21 @@ class DocumentServiceTest {
 
         assertFalse(deleted);
 
-        verify(repository, never()).delete(any(DocumentEntity.class));
+        verify(repository, never())
+                .delete(any(DocumentEntity.class));
+
         verifyNoInteractions(
                 versionRepository,
                 fileStorageService,
-                auditService
+                auditService,
+                currentUserService
         );
     }
 
     @Test
-    void deleteDocument_deletesVersionsBeforeParent() throws IOException {
+    void deleteDocument_deletesVersionsBeforeParent()
+            throws IOException {
+
         DocumentEntity document =
                 new DocumentEntity("report.pdf", "application/pdf");
 
@@ -158,6 +175,9 @@ class DocumentServiceTest {
         when(versionRepository.findByDocumentIdOrderByVersionNumberDesc(6L))
                 .thenReturn(List.of(version2, version1));
 
+        when(currentUserService.getUsername())
+                .thenReturn("admin");
+
         TransactionSynchronizationManager.initSynchronization();
 
         try {
@@ -179,11 +199,14 @@ class DocumentServiceTest {
             verify(auditService).record(
                     6L,
                     "DOCUMENT_DELETED",
-                    "system",
+                    "admin",
                     "Document deleted: report.pdf"
             );
 
-            verify(fileStorageService, never()).delete(anyString());
+            verify(currentUserService).getUsername();
+
+            verify(fileStorageService, never())
+                    .delete(anyString());
 
             assertEquals(
                     1,
@@ -230,6 +253,9 @@ class DocumentServiceTest {
         when(versionRepository.findByDocumentIdOrderByVersionNumberDesc(6L))
                 .thenReturn(List.of(version2, version1));
 
+        when(currentUserService.getUsername())
+                .thenReturn("admin");
+
         TransactionSynchronizationManager.initSynchronization();
 
         try {
@@ -238,11 +264,14 @@ class DocumentServiceTest {
             verify(auditService).record(
                     6L,
                     "DOCUMENT_DELETED",
-                    "system",
+                    "admin",
                     "Document deleted: report.pdf"
             );
 
-            verify(fileStorageService, never()).delete(anyString());
+            verify(currentUserService).getUsername();
+
+            verify(fileStorageService, never())
+                    .delete(anyString());
 
             for (TransactionSynchronization synchronization :
                     TransactionSynchronizationManager.getSynchronizations()) {
