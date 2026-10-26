@@ -1,3 +1,4 @@
+
 export interface DocumentItem {
   id: number;
   name: string;
@@ -15,25 +16,119 @@ export class ApiError extends Error {
   }
 }
 
-let accessToken: string | null = null;
-let unauthorizedHandler: (() => void) | null = null;
+const TOKEN_KEY = 'ecm_access_token';
 
-export function setAccessToken(token: string | null) {
-  accessToken = token;
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+
+    const base64 = parts[1]
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+
+    const padded = base64.padEnd(
+      Math.ceil(base64.length / 4) * 4,
+      '='
+    );
+
+    const payload: unknown = JSON.parse(atob(padded));
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return null;
+    }
+
+    return payload as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
-export function setUnauthorizedHandler(handler: (() => void) | null) {
+function isTokenUsable(token: string): boolean {
+  const payload = decodeJwtPayload(token);
+
+  if (!payload) return false;
+
+  if (typeof payload.sub !== 'string' || !payload.sub.trim()) {
+    return false;
+  }
+
+  if (typeof payload.exp !== 'number') {
+    return false;
+  }
+
+  return payload.exp > Math.floor(Date.now() / 1000);
+}
+
+function restoreAccessToken(): string | null {
+  const token = sessionStorage.getItem(TOKEN_KEY);
+
+  if (!token) return null;
+
+  if (!isTokenUsable(token)) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    return null;
+  }
+
+  return token;
+}
+
+let accessToken: string | null = restoreAccessToken();
+let unauthorizedHandler: (() => void) | null = null;
+
+export function getAccessToken(): string | null {
+  if (accessToken && !isTokenUsable(accessToken)) {
+    setAccessToken(null);
+  }
+
+  return accessToken;
+}
+
+export function getAuthenticatedUsername(): string | null {
+  const token = getAccessToken();
+
+  if (!token) return null;
+
+  const payload = decodeJwtPayload(token);
+  return typeof payload?.sub === 'string' ? payload.sub : null;
+}
+
+export function setAccessToken(token: string | null) {
+  if (token && !isTokenUsable(token)) {
+    throw new Error('Invalid or expired authentication token');
+  }
+
+  accessToken = token;
+
+  if (token) {
+    sessionStorage.setItem(TOKEN_KEY, token);
+  } else {
+    sessionStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+export function setUnauthorizedHandler(
+  handler: (() => void) | null
+) {
   unauthorizedHandler = handler;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
   const headers = new Headers(options.headers);
+  const token = getAccessToken();
 
-  if (accessToken) {
-    headers.set('Authorization', `Bearer ${accessToken}`);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
   }
 
-  if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
+  if (
+    options.body &&
+    !(options.body instanceof FormData) &&
+    !headers.has('Content-Type')
+  ) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -45,7 +140,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     referrerPolicy: 'no-referrer'
   });
 
-  if (response.status === 401 && accessToken) {
+  if (response.status === 401 && token && token === getAccessToken()) {
     unauthorizedHandler?.();
   }
 
@@ -120,7 +215,9 @@ function parseDocuments(value: unknown): DocumentItem[] {
 
 export const documents = {
   async list() {
-    return parseDocuments(await request<unknown>('/api/v1/documents'));
+    return parseDocuments(
+      await request<unknown>('/api/v1/documents')
+    );
   },
 
   get(id: number) {
@@ -131,7 +228,7 @@ export const documents = {
     const data = new FormData();
     data.append('file', file);
 
-    return request<DocumentItem>('/api/v1/documents', {
+    return request<DocumentItem>('/api/v1/documents/upload', {
       method: 'POST',
       body: data
     });
@@ -152,23 +249,31 @@ export const documents = {
 
   async download(id: number, name: string) {
     const headers = new Headers();
+    const token = getAccessToken();
 
-    if (accessToken) {
-      headers.set('Authorization', `Bearer ${accessToken}`);
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
     }
 
-    const response = await fetch(`/api/v1/documents/${id}/download`, {
-      headers,
-      cache: 'no-store',
-      referrerPolicy: 'no-referrer'
-    });
+    const response = await fetch(
+      `/api/v1/documents/${id}/download`,
+      {
+        headers,
+        credentials: 'same-origin',
+        cache: 'no-store',
+        referrerPolicy: 'no-referrer'
+      }
+    );
 
-    if (response.status === 401) {
+    if (response.status === 401 && token && token === getAccessToken()) {
       unauthorizedHandler?.();
     }
 
     if (!response.ok) {
-      throw new ApiError(`Download failed (${response.status})`, response.status);
+      throw new ApiError(
+        `Download failed (${response.status})`,
+        response.status
+      );
     }
 
     const blob = await response.blob();
@@ -186,4 +291,3 @@ export const documents = {
     }
   }
 };
-

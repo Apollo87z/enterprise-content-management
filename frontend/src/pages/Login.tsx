@@ -88,7 +88,7 @@ export default function Login() {
 
         {quickAccounts.length > 0 && (
           <div className="demo-login">
-            <div className="demo-login-heading">Quick sign in</div>
+            <div className="demo-login-heading">Quick sign in only for Demo Purposes</div>
             <div className="demo-login-actions">
               {quickAccounts.map(account => (
                 <button
