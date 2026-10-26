@@ -30,6 +30,7 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class DocumentServiceTest {
 
+
     @Mock
     private DocumentRepository repository;
 

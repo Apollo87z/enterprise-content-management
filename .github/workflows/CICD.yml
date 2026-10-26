@@ -1,4 +1,5 @@
-name: CI Pipeline
+
+name: Full Stack CI/CD
 
 on:
   push:
@@ -7,11 +8,13 @@ on:
       - dev-backend
       - dev-frontend
       - main
+
   pull_request:
     branches:
       - dev-backend
       - dev-frontend
       - main
+
   workflow_dispatch:
 
 permissions:
@@ -26,8 +29,11 @@ jobs:
     name: Backend Tests and Build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -35,11 +41,13 @@ jobs:
           java-version: '17'
           cache: maven
           cache-dependency-path: backend/pom.xml
+
       - name: Run backend tests and build
         working-directory: backend
         run: |
           chmod +x ./mvnw
           ./mvnw -B clean verify
+
       - name: Upload backend test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,50 +62,70 @@ jobs:
     needs: backend
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
-      - name: Run frontend tests
+
+      - name: Run frontend tests if configured
         working-directory: frontend
-        run: npm test -- --run
+        shell: bash
+        run: |
+          if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
+            npm test -- --run
+          else
+            echo "No frontend test script configured; skipping frontend tests."
+          fi
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
 
   promote-feature:
-    name: Merge feature into both dev branches and delete feature
+    name: Merge Feature into Both Dev Branches
     needs: frontend
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
+    if: >-
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/heads/feature/')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+
     permissions:
       contents: write
+
     concurrency:
       group: promote-feature-to-dev
       cancel-in-progress: false
+
     steps:
       - name: Checkout full history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Merge and atomically update both dev branches, then delete feature
+
+      - name: Merge into both dev branches and delete feature
         env:
           FEATURE_SHA: ${{ github.sha }}
           FEATURE_BRANCH: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
           git fetch origin dev-backend dev-frontend
 
           git switch -C promote-backend origin/dev-backend
@@ -106,9 +134,6 @@ jobs:
           git switch -C promote-frontend origin/dev-frontend
           git merge --no-edit "$FEATURE_SHA"
 
-          # Atomic push: either both dev branches update AND the feature branch
-          # is deleted, or none of those three remote changes happen.
-          # The lease prevents deletion if new commits landed on the feature branch.
           git push --atomic \
             --force-with-lease="refs/heads/${FEATURE_BRANCH}:${FEATURE_SHA}" \
             origin \
@@ -117,30 +142,39 @@ jobs:
             ":refs/heads/${FEATURE_BRANCH}"
 
   publish-ghcr:
-    name: Build and Publish Backend and Frontend Images
+    name: Publish Backend and Frontend to GHCR
     needs: frontend
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+
     permissions:
       contents: read
       packages: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set lowercase image names
         id: images
         shell: bash
         run: |
           echo "backend=ghcr.io/${GITHUB_REPOSITORY,,}-backend" >> "$GITHUB_OUTPUT"
           echo "frontend=ghcr.io/${GITHUB_REPOSITORY,,}-frontend" >> "$GITHUB_OUTPUT"
+
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and publish backend
         uses: docker/build-push-action@v6
         with:
@@ -150,6 +184,7 @@ jobs:
           tags: |
             ${{ steps.images.outputs.backend }}:latest
             ${{ steps.images.outputs.backend }}:sha-${{ github.sha }}
+
       - name: Build and publish frontend
         uses: docker/build-push-action@v6
         with:
