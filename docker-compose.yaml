@@ -1,13 +1,15 @@
+
 name: java-ecm
 
 services:
   postgres:
     image: postgres:17
     container_name: ecm-postgres
+    env_file:
+      - ./backend/.env
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ecmdb
+      POSTGRES_USER: ecm
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
@@ -15,7 +17,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
       interval: 5s
       timeout: 5s
       retries: 10
@@ -27,14 +29,14 @@ services:
       dockerfile: Dockerfile
     image: ecm-backend:local
     container_name: ecm-backend
+    env_file:
+      - ./backend/.env
     ports:
       - "127.0.0.1:8081:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ecmdb
+      SPRING_DATASOURCE_USERNAME: ecm
       STORAGE_LOCATION: /app/uploads
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
     volumes:
       - document_storage:/app/uploads
     depends_on:
@@ -73,11 +75,10 @@ services:
       dockerfile: Dockerfile
     image: ecm-frontend:local
     container_name: ecm-frontend
+    env_file:
+      - ./frontend/.env
     ports:
-      - "127.0.0.1:5173:5173"
-    environment:
-      COLLABORA_URL: http://localhost:9981
-      WOPI_PUBLIC_URL: http://backend:8080
+      - "127.0.0.1:5174:5173"
     depends_on:
       backend:
         condition: service_healthy

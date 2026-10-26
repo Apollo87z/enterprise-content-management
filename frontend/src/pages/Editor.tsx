@@ -1,6 +1,12 @@
+
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Info } from 'lucide-react';
+import {
+  ArrowLeft,
+  AlertCircle,
+  Info,
+  RefreshCw
+} from 'lucide-react';
 import { documents } from '../lib/api';
 
 interface EditorSession {
@@ -8,26 +14,40 @@ interface EditorSession {
   token: string;
 }
 
+const DEFAULT_COLLABORA_URL = 'http://localhost:9981';
+const INTERNAL_COLLABORA_URL = 'http://collabora:9980';
+const DEFAULT_WOPI_URL = 'http://backend:8080';
+
 function getToken(response: Record<string, unknown>): string {
-  const value = response.accessToken ?? response.access_token ?? response.token;
+  const value =
+    response.accessToken ??
+    response.access_token ??
+    response.token;
 
   if (typeof value !== 'string' || !value) {
-    throw new Error('Invalid editor session response');
+    throw new Error('Invalid WOPI token response from backend');
   }
 
   return value;
 }
 
 function getEditorUrl(xml: string, extension: string): string {
-  const discovery = new DOMParser().parseFromString(xml, 'application/xml');
+  const discovery = new DOMParser().parseFromString(
+    xml,
+    'application/xml'
+  );
 
   if (discovery.querySelector('parsererror')) {
-    throw new Error('Invalid Collabora discovery response');
+    throw new Error('Invalid Collabora discovery XML response');
   }
 
-  const actions = Array.from(discovery.getElementsByTagName('action'));
+  const actions = Array.from(
+    discovery.getElementsByTagName('action')
+  );
+
   const matching = actions.filter(
-    action => action.getAttribute('ext')?.toLowerCase() === extension
+    action =>
+      action.getAttribute('ext')?.toLowerCase() === extension
   );
 
   const action =
@@ -37,10 +57,45 @@ function getEditorUrl(xml: string, extension: string): string {
   const url = action?.getAttribute('urlsrc');
 
   if (!url) {
-    throw new Error(`No Collabora editor available for .${extension}`);
+    throw new Error(
+      `Collabora does not support editing or viewing .${extension} files`
+    );
   }
 
   return url;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function resolveEditorUrl(actionUrl: string): URL {
+  const browserCollabora = new URL(
+    import.meta.env.VITE_COLLABORA_URL ||
+      DEFAULT_COLLABORA_URL
+  );
+
+  const internalCollabora = new URL(INTERNAL_COLLABORA_URL);
+  const editor = new URL(actionUrl);
+
+  const allowedOrigins = [
+    browserCollabora.origin,
+    internalCollabora.origin
+  ];
+
+  if (!allowedOrigins.includes(editor.origin)) {
+    throw new Error(
+      `Unexpected Collabora origin: ${editor.origin}. ` +
+      `Allowed origins: ${allowedOrigins.join(', ')}`
+    );
+  }
+
+  // Discovery may return a Docker-internal address.
+  // The browser must connect through the published port.
+  editor.protocol = browserCollabora.protocol;
+  editor.host = browserCollabora.host;
+
+  return editor;
 }
 
 export default function Editor() {
@@ -50,16 +105,27 @@ export default function Editor() {
   const [name, setName] = useState('Document');
   const [session, setSession] = useState<EditorSession | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState('Initializing editor');
+  const [retryCount, setRetryCount] = useState(0);
 
   const form = useRef<HTMLFormElement>(null);
   const submitted = useRef(false);
 
   useEffect(() => {
     let active = true;
+    let currentStep = 'Initializing editor';
+
+    const updateStep = (value: string) => {
+      currentStep = value;
+      if (active) setStep(value);
+    };
 
     submitted.current = false;
     setSession(null);
     setLoading(true);
+    setError(null);
+    updateStep('Initializing editor');
 
     async function start() {
       try {
@@ -67,57 +133,103 @@ export default function Editor() {
           throw new Error('Invalid document ID');
         }
 
+        // 1. Load document metadata
+        updateStep('Loading document information');
+
         const document = await documents.get(id);
+
         if (!active) return;
 
         setName(document.name);
 
-        const extension = document.name.split('.').pop()?.toLowerCase() || '';
+        const extension =
+          document.name.split('.').pop()?.toLowerCase() || '';
 
         if (!/^[a-z0-9]{1,12}$/.test(extension)) {
           throw new Error('Unsupported document extension');
         }
 
-        const discovery = await fetch('/collabora/hosting/discovery', {
-          cache: 'no-store',
-          credentials: 'same-origin'
-        });
+        // 2. Get Collabora discovery information
+        updateStep('Connecting to Collabora');
+
+        const discovery = await fetch(
+          '/collabora/hosting/discovery',
+          {
+            cache: 'no-store',
+            credentials: 'same-origin'
+          }
+        );
 
         if (!discovery.ok) {
-          throw new Error(`Collabora unavailable (${discovery.status})`);
+          throw new Error(
+            `Collabora discovery failed: HTTP ${discovery.status}`
+          );
         }
 
-        const action = getEditorUrl(await discovery.text(), extension);
-        const collabora = new URL(
-          import.meta.env.COLLABORA_URL || 'http://localhost:9981'
-        );
-        const editor = new URL(action);
+        const xml = await discovery.text();
+        const actionUrl = getEditorUrl(xml, extension);
 
-        if (editor.origin !== collabora.origin) {
-          throw new Error('Unexpected Collabora editor origin');
-        }
+        // 3. Resolve the browser-accessible editor URL
+        updateStep('Resolving Collabora editor URL');
+
+        const editor = resolveEditorUrl(actionUrl);
+
+        // 4. Configure the WOPI URL
+        updateStep('Configuring WOPI connection');
 
         const wopi = new URL(
-          import.meta.env.WOPI_PUBLIC_URL || 'http://backend:8080'
+          import.meta.env.VITE_WOPI_PUBLIC_URL ||
+            DEFAULT_WOPI_URL
         );
 
-        if (wopi.protocol !== 'http:' && wopi.protocol !== 'https:') {
+        if (
+          wopi.protocol !== 'http:' &&
+          wopi.protocol !== 'https:'
+        ) {
           throw new Error('Invalid WOPI server URL');
         }
 
-        editor.searchParams.set(
-          'WOPISrc',
-          new URL(`/wopi/files/${id}`, wopi).toString()
+        const wopiFileUrl = new URL(
+          `/wopi/files/${id}`,
+          wopi
+        ).toString();
+
+        editor.searchParams.set('WOPISrc', wopiFileUrl);
+
+        // 5. Request a document-scoped WOPI token
+        updateStep('Requesting WOPI access token');
+
+        const tokenResponse = await documents.wopiToken(id);
+        const token = getToken(tokenResponse);
+
+        if (!active) return;
+
+        updateStep('Loading Collabora editor');
+
+        setSession({
+          url: editor.toString(),
+          token
+        });
+      } catch (err) {
+        if (!active) return;
+
+        const message = getErrorMessage(err);
+
+        console.error(
+          '[Collabora Editor] Initialization failed',
+          {
+            documentId: id,
+            step: currentStep,
+            message
+          }
         );
 
-        const token = getToken(await documents.wopiToken(id));
-
-        if (active) {
-          setSession({ url: editor.toString(), token });
-        }
-      } catch {
+        setError(message);
+        setSession(null);
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+        }
       }
     }
 
@@ -126,14 +238,27 @@ export default function Editor() {
     return () => {
       active = false;
     };
-  }, [id]);
+  }, [id, retryCount]);
 
   useEffect(() => {
-    if (!session || !form.current || submitted.current) return;
+    if (!session || !form.current || submitted.current) {
+      return;
+    }
 
     submitted.current = true;
-    form.current.submit();
+
+    try {
+      form.current.submit();
+    } catch (err) {
+      setError(
+        `Unable to submit Collabora editor form: ${getErrorMessage(err)}`
+      );
+    }
   }, [session]);
+
+  const retry = () => {
+    setRetryCount(count => count + 1);
+  };
 
   return (
     <>
@@ -150,9 +275,70 @@ export default function Editor() {
         </div>
       </div>
 
-      {loading && <div className="panel empty">Preparing editor…</div>}
+      {loading && (
+        <div className="panel empty">
+          <RefreshCw size={20} />
+          <p>Preparing editor…</p>
+          <p>{step}</p>
+        </div>
+      )}
 
-      {session && (
+      {error && (
+        <div
+          className="panel"
+          role="alert"
+          style={{
+            padding: 24,
+            border: '1px solid #dc2626',
+            borderRadius: 10
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              color: '#dc2626',
+              marginBottom: 12
+            }}
+          >
+            <AlertCircle size={24} />
+            <h2 style={{ margin: 0 }}>
+              Collabora failed to load
+            </h2>
+          </div>
+
+          <p>
+            <strong>Failed step:</strong> {step}
+          </p>
+
+          <p>
+            <strong>Error:</strong> {error}
+          </p>
+
+          <p>
+            <strong>Document ID:</strong> {id}
+          </p>
+
+          <button
+            type="button"
+            onClick={retry}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginTop: 16,
+              padding: '10px 16px',
+              cursor: 'pointer'
+            }}
+          >
+            <RefreshCw size={16} />
+            Retry Editor
+          </button>
+        </div>
+      )}
+
+      {session && !error && (
         <>
           <div className="notice">
             <Info size={17} />
@@ -172,6 +358,7 @@ export default function Editor() {
               value={session.token}
               readOnly
             />
+
             <input
               type="hidden"
               name="access_token_ttl"
@@ -182,6 +369,7 @@ export default function Editor() {
 
           <div className="editor-frame">
             <iframe
+              key={retryCount}
               name="collabora-frame"
               title="Collabora document editor"
               allow="clipboard-read; clipboard-write"

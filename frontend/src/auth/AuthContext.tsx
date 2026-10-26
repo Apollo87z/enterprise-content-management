@@ -1,3 +1,4 @@
+
 import {
   createContext,
   useCallback,
@@ -6,8 +7,15 @@ import {
   useMemo,
   useState
 } from 'react';
+
 import type { ReactNode } from 'react';
-import { authApi, setAccessToken, setUnauthorizedHandler } from '../lib/api';
+
+import {
+  authApi,
+  getAuthenticatedUsername,
+  setAccessToken,
+  setUnauthorizedHandler
+} from '../lib/api';
 
 interface AuthState {
   authenticated: boolean;
@@ -18,8 +26,15 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [username, setUsername] = useState<string | null>(null);
+export function AuthProvider({
+  children
+}: {
+  children: ReactNode;
+}) {
+  // Restore the username from the saved, unexpired JWT.
+  const [username, setUsername] = useState<string | null>(
+    () => getAuthenticatedUsername()
+  );
 
   const logout = useCallback(() => {
     setAccessToken(null);
@@ -34,16 +49,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [logout]);
 
-  const login = useCallback(async (name: string, password: string) => {
-    const response = await authApi.login(name, password);
+  const login = useCallback(
+    async (name: string, password: string) => {
+      const response = await authApi.login(name, password);
 
-    if (!response.accessToken) {
-      throw new Error('Invalid login response');
-    }
+      if (!response.accessToken) {
+        throw new Error('Invalid login response');
+      }
 
-    setAccessToken(response.accessToken);
-    setUsername(name);
-  }, []);
+      setAccessToken(response.accessToken);
+
+      const authenticatedUsername = getAuthenticatedUsername();
+
+      if (!authenticatedUsername) {
+        setAccessToken(null);
+        throw new Error('Missing username in authentication token');
+      }
+
+      setUsername(authenticatedUsername);
+    },
+    []
+  );
 
   const value = useMemo(
     () => ({
@@ -55,7 +81,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [username, login, logout]
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
