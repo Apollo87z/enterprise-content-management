@@ -1,0 +1,90 @@
+name: java-ecm
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: ecm-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ecm-backend:local
+    container_name: ecm-backend
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      STORAGE_LOCATION: /app/uploads
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+    volumes:
+      - document_storage:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:8080/api/v1/health > /dev/null || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+  collabora:
+    image: collabora/code:latest
+    container_name: ecm-collabora
+    ports:
+      - "127.0.0.1:9981:9980"
+    environment:
+      aliasgroup1: "http://backend:8080"
+      extra_params: >-
+        --o:ssl.enable=false
+        --o:ssl.termination=false
+    volumes:
+      - ./backend/collabora/coolwsd.xml:/etc/coolwsd/coolwsd.xml:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ecm-frontend:local
+    container_name: ecm-frontend
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      COLLABORA_URL: http://localhost:9981
+      WOPI_PUBLIC_URL: http://backend:8080
+    depends_on:
+      backend:
+        condition: service_healthy
+      collabora:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  document_storage:
